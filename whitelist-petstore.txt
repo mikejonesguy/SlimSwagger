@@ -1,0 +1,8 @@
+addPet
+deletePet
+findPetsByStatus
+findPetsByTags
+getPetById
+updatePet
+updatePetWithForm
+uploadFile
