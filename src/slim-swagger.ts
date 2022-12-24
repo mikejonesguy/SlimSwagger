@@ -20,7 +20,7 @@ class Helper {
     private doc: OpenAPI.Document,
   ) { }
 
-  getOperationIds(includeTags: boolean = true): string[] {
+  getOperationIds(includeTags: boolean = false): string[] {
     let operationIds: Array<string> = new Array();
     const paths = Object.values(this.doc.paths ?? {});
     paths.forEach(p => {
@@ -201,10 +201,10 @@ SlimSwagger: a utility to slim down an existing swagger spec to a specific list 
 
 Usage:
   To list all available operationId's in a given spec:
-  node ./build/slim-swagger.js -s ./my-swagger-spec.json --list
+  node ./slim-swagger.js -s ./my-swagger-spec.json --list
 
   To generate a slimmed-down spec with only the whitelisted operations:
-  node ./build/slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./whitelist-petstore.txt -o ./slim.json
+  node ./slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./whitelist-petstore.txt -o ./slim.json
 
 Options:
   -s <path>    (required) the path to the source file to be slimmed (can be a filesystem path or a URL)
@@ -217,16 +217,17 @@ Options:
 }
 
 async function slim(helper: Helper, outputFile: string, whitelist: string): Promise<number> {
-  let allowed: string = '';
+  let whitelistContents: string = '';
   try {
     const readFile = util.promisify(fs.readFile);
-    allowed = (await readFile(whitelist)).toString().trim();
-    if (!allowed?.length) throw new Error("Empty whitelist file: " + whitelist);
+    whitelistContents = (await readFile(whitelist)).toString().trim();
+    if (!whitelistContents?.length) throw new Error("Empty whitelist file: " + whitelist);
   } catch (err) {
     console.error(err);
     return Promise.resolve(-1);
   }
-  helper.filterToWhitelist(allowed.split('\n'));
+  const whitelistOps = whitelistContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
+  helper.filterToWhitelist(whitelistOps);
   const json = helper.toJson();
   try {
     const writeFile = util.promisify(fs.writeFile);

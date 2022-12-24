@@ -18,19 +18,19 @@ To rebuild from source, from project root folder:
 npm run build
 ```
 
-The resulting `./build/slim-swagger.js` can be executed using [node](https://nodejs.org/en/) as show above in the **Usage** section.
+The resulting `./dist/slim-swagger.js` can be executed using [node](https://nodejs.org/en/) as show above in the **Usage** section.
 
 
 Usage
 --------------------------
 To list all available `operationId`'s in a given spec:
 ```bash
-node ./build/slim-swagger.js -s ./my-swagger-spec.json --list
+node ./slim-swagger.js -s ./my-swagger-spec.json --list
 ```
 
 To slim down a spec to the whitelisted operations:
 ```bash
-node ./build/slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./whitelist-petstore.txt -o ./slim.json
+node ./slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./whitelist-petstore.txt -o ./slim.json
 ```
 
 
