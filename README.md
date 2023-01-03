@@ -18,7 +18,7 @@ To rebuild from source, from project root folder:
 npm run build
 ```
 
-The resulting `./dist/slim-swagger.js` can be executed using [node](https://nodejs.org/en/) as show above in the **Usage** section.
+The resulting `./dist/slim-swagger.js` can be executed using [node](https://nodejs.org/en/) as show below in the **Usage** section.
 
 
 Usage
