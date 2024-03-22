@@ -3,6 +3,7 @@ const fs = require('fs');
 
 module.exports = {
   entry: './src/slim-swagger.ts',
+  mode: 'production',
   target: 'node',
   module: {
     rules: [

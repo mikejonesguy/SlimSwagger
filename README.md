@@ -38,8 +38,9 @@ Options
 --------------------------
 ```text
 -s <path>    (required) the path to the source file to be slimmed (can be a filesystem path or a URL)
--w <path>    (required) the path to a file containing a whitelist of allowed operationId values (1 per line)
+-w <path>    (required for slimming) the path to a file containing a list of allowed operationId values (1 per line)
 -o <path>    (optional) the path for the output file (default: source directory + 'slim-swagger.json')
+--invert     (optional) turns the operations "whitelist" into a "blacklist" (disallowed operationId values to be removed)
 --list       (optional) outputs a list of all available operationId values from the source file (default if no allowed list is given)
 ```
 

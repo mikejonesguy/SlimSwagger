@@ -42,16 +42,20 @@ class Helper {
     return operationIds;
   }
 
-  filterToWhitelist(whitelist: string[]) {
-    if (!whitelist || !whitelist.length) {
-      console.log("Empty whitelist file")
+  filterToOperationsList(operationsList: string[], invert: boolean) {
+    if (!operationsList?.length) {
+      console.log("Empty operations list file")
       return;
     }
+
+    if (invert) {
+      const allOperationsList = this.getOperationIds();
+      operationsList = allOperationsList.filter(o => !operationsList.includes(o));
+    }
+
     this.updateStats(false);
-    this.removeAllOperations(whitelist);
-    const refs: Array<string> = new Array();
-    whitelist.forEach(id => this.getOperationRefs(id, refs));
-    this.removeAllModels(refs);
+    this.removeAllOperations(operationsList);
+    this.removeAllModels(operationsList);
     this.updateStats(true);
   }
 
@@ -137,31 +141,40 @@ class Helper {
     return splits[splits.length - 1];
   }
 
-  private removeAllModels(whitelist: string[]) {
+  private removeAllModels(operationsList: string[]) {
+    const modelRefs: Array<string> = new Array();
+    operationsList.forEach(id => this.getOperationRefs(id, modelRefs));
     const doc = this.doc as any;
     const models = doc.definitions ?? doc.components.schemas ?? {};
-    const allowed = whitelist.map(r => this.getModelId(r) ?? '');
+    const allowed = modelRefs.map(r => this.getModelId(r) ?? '');
     const keys = Object.keys(models);
     keys.forEach(key => {
-      // remove model definitions that aren't in the whitelist
-      if (!allowed.includes(key))  delete models[key];
+      // remove model definitions that ARE NOT in the operations list
+      if (!allowed.includes(key)) {
+        delete models[key];
+      }
     });
   }
 
-  private removeAllOperations(whitelist: string[]) {
+  private removeAllOperations(operationsList: string[]) {
     const paths = this.doc.paths as any;
     const pathsKeys = Object.keys(paths);
     pathsKeys.forEach(key => {
       const path = paths[key];
       const opsKeys = Object.keys(path);
-      opsKeys.forEach(op => {
+      for (const op of opsKeys) {
         const operationId = path[op]?.operationId as string;
-        // remove operations that aren't in the whitelist
-        if (!!operationId && !whitelist.includes(operationId)) delete path[op];
-      });
+        if (!operationId) continue;
+        // remove operations that ARE NOT in the operations list
+        if (!operationsList.includes(operationId)) {
+          delete path[op];
+        }
+      }
 
       // recheck and remove any empty paths
-      if (Object.keys(path).length === 0) delete paths[key];
+      if (Object.keys(path).length === 0) {
+        delete paths[key];
+      }
     });
   }
 }
@@ -174,8 +187,9 @@ async function main(args: string[]): Promise<number> {
   const sourceFile = argv['s'] ?? '';
   const sourceDir = sourceFile.startsWith('http') ? '.' : path.dirname(sourceFile);
   let outputFile: string = argv['o'] ?? sourceDir + path.sep;
-  const whitelist: string = argv['w'];
+  const operationsList: string = argv['w'];
   const listOnly: boolean = argv['list'];
+  const invert: boolean = argv['invert'];
   if (outputFile.endsWith(path.sep)) outputFile += 'slim-swagger.json'
   if (!sourceFile) {
     usage();
@@ -183,7 +197,7 @@ async function main(args: string[]): Promise<number> {
     const parser = new SwaggerParser();
     const bundle = await parser.bundle(sourceFile);
     const helper = new Helper(bundle);
-    if (listOnly || !whitelist) {
+    if (listOnly || !operationsList) {
       const ids = helper.getOperationIds();
       ids.forEach(id => {
         console.log(id);
@@ -191,7 +205,7 @@ async function main(args: string[]): Promise<number> {
       return Promise.resolve(0);
     }
 
-    return await slim(helper, outputFile, whitelist);
+    return await slim(helper, outputFile, operationsList, invert);
   }
 }
 
@@ -203,31 +217,32 @@ Usage:
   To list all available operationId's in a given spec:
   node ./slim-swagger.js -s ./my-swagger-spec.json --list
 
-  To generate a slimmed-down spec with only the whitelisted operations:
-  node ./slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./whitelist-petstore.txt -o ./slim.json
+  To generate a slimmed-down spec with only the operationsListed operations:
+  node ./slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./operationsList-petstore.txt -o ./slim.json
 
 Options:
   -s <path>    (required) the path to the source file to be slimmed (can be a filesystem path or a URL)
-  -w <path>    (required for slimming) the path to a file containing a whitelist of allowed operationId values (1 per line)
+  -w <path>    (required for slimming) the path to a file containing a list of allowed operationId values (1 per line)
   -o <path>    (optional) the path for the output file (default: source directory + 'slim-swagger.json')
+  --invert     (optional) turns the operations "whitelist" into a "blacklist" (disallowed operationId values to be removed)
   --list       (optional) outputs a list of all available operationId values from the source file (default if no allowed list is given)
   `);
 
   process.exit(exitCode);
 }
 
-async function slim(helper: Helper, outputFile: string, whitelist: string): Promise<number> {
-  let whitelistContents: string = '';
+async function slim(helper: Helper, outputFile: string, operationsList: string, invert: boolean): Promise<number> {
+  let operationsListContents: string = '';
   try {
     const readFile = util.promisify(fs.readFile);
-    whitelistContents = (await readFile(whitelist)).toString().trim();
-    if (!whitelistContents?.length) throw new Error("Empty whitelist file: " + whitelist);
+    operationsListContents = (await readFile(operationsList)).toString().trim();
+    if (!operationsListContents?.length) throw new Error("Empty operations list file: " + operationsList);
   } catch (err) {
     console.error(err);
     return Promise.resolve(-1);
   }
-  const whitelistOps = whitelistContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
-  helper.filterToWhitelist(whitelistOps);
+  const operationsListOps = operationsListContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
+  helper.filterToOperationsList(operationsListOps, invert);
   const json = helper.toJson();
   try {
     const writeFile = util.promisify(fs.writeFile);
