@@ -5,4 +5,3 @@ findPetsByTags
 getPetById
 updatePet
 updatePetWithForm
-uploadFile

@@ -13,14 +13,18 @@ interface Stats {
   slimModels?: number;
 }
 
+function isDefined<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined;
+}
+
 class Helper {
-  private stats: Stats = { };
+  private readonly stats: Stats = { };
 
   constructor(
-    private doc: OpenAPI.Document,
+    private readonly doc: OpenAPI.Document,
   ) { }
 
-  getOperationIds(includeTags: boolean = false): string[] {
+  getOperationIds(includeTags: boolean = false): Array<string> {
     let operationIds: Array<string> = new Array();
     const paths = Object.values(this.doc.paths ?? {});
     paths.forEach(p => {
@@ -29,7 +33,7 @@ class Helper {
         const operationId = method?.operationId as string;
         if (!!operationId) {
           if (includeTags) {
-            const tags: string[] = method?.tags ?? [];
+            const tags: Array<string> = method?.tags ?? new Array();
             tags.forEach(t => operationIds.push(t + '.' + operationId));
           } else {
             operationIds.push(operationId);
@@ -42,20 +46,24 @@ class Helper {
     return operationIds;
   }
 
-  filterToOperationsList(operationsList: string[], invert: boolean) {
+  getModelIdsByOperationId(operationId: string): Array<string> {
+    return this.getOperationRefs(operationId)
+      .map(ref => this.getModelId(ref))
+      .filter((id): id is string => isDefined(id));
+  }
+
+  filterSpec(operationsList: Array<string>, modelsList: Array<string>, invert: boolean) {
     if (!operationsList?.length) {
       console.log("Empty operations list file")
       return;
     }
 
-    if (invert) {
-      const allOperationsList = this.getOperationIds();
-      operationsList = allOperationsList.filter(o => !operationsList.includes(o));
-    }
+    // if invert == true, convert the blacklist to a whitelist
+    let whitelistOps = invert ? this.getOperationIds().filter(o => !operationsList.includes(o)) : [...operationsList];
 
     this.updateStats(false);
-    this.removeAllOperations(operationsList);
-    this.removeAllModels(operationsList);
+    this.filterOperations(whitelistOps);
+    this.filterModels(whitelistOps, modelsList, invert);
     this.updateStats(true);
   }
 
@@ -83,7 +91,7 @@ class Helper {
     }
   }
 
-  private getModelIds(): string[] {
+  private getModelIds(): Array<string> {
     const doc = this.doc as any;
     const models = doc.definitions ?? doc.components.schemas ?? {};
     const keys = Object.keys(models);
@@ -104,12 +112,12 @@ class Helper {
     return null;
   }
 
-  private getOperationRefs(id: string, refs: string[] = new Array()): string[] {
+  private getOperationRefs(id: string, refs: Array<string> = new Array()): Array<string> {
     const op = this.getOperationById(id);
     return this.getItemRefs(op, refs);
   }
   
-  private getItemRefs(item: any, refs: string[] = new Array()): string[] {
+  private getItemRefs(item: any, refs: Array<string> = new Array()): Array<string> {
     if (!item || item !== Object(item)) return refs;
     if (Array.isArray(item)) item.forEach(i => this.getItemRefs(i, refs));
     else {
@@ -136,27 +144,12 @@ class Helper {
   }
 
   private getModelId(ref: string): string | null {
-    if (!ref || !ref.startsWith('#/')) return ref;
+    if (!ref?.startsWith('#/')) return ref;
     const splits = ref.split('/');
     return splits[splits.length - 1];
   }
 
-  private removeAllModels(operationsList: string[]) {
-    const modelRefs: Array<string> = new Array();
-    operationsList.forEach(id => this.getOperationRefs(id, modelRefs));
-    const doc = this.doc as any;
-    const models = doc.definitions ?? doc.components.schemas ?? {};
-    const allowed = modelRefs.map(r => this.getModelId(r) ?? '');
-    const keys = Object.keys(models);
-    keys.forEach(key => {
-      // remove model definitions that ARE NOT in the operations list
-      if (!allowed.includes(key)) {
-        delete models[key];
-      }
-    });
-  }
-
-  private removeAllOperations(operationsList: string[]) {
+  private filterOperations(whitelistOps: Array<string>) {
     const paths = this.doc.paths as any;
     const pathsKeys = Object.keys(paths);
     pathsKeys.forEach(key => {
@@ -165,8 +158,9 @@ class Helper {
       for (const op of opsKeys) {
         const operationId = path[op]?.operationId as string;
         if (!operationId) continue;
-        // remove operations that ARE NOT in the operations list
-        if (!operationsList.includes(operationId)) {
+
+        // remove operations that ARE NOT in the whitelist
+        if (!whitelistOps.includes(operationId)) {
           delete path[op];
         }
       }
@@ -177,9 +171,29 @@ class Helper {
       }
     });
   }
+
+  private filterModels(whitelistOps: Array<string>, modelsList: Array<string>, invert: boolean) {
+    const modelRefs: Array<string> = new Array();
+    whitelistOps.forEach(id => this.getOperationRefs(id, modelRefs));
+    const doc = this.doc as any;
+    const models = doc.definitions ?? doc.components.schemas ?? {};
+    // get all the models that are dependencies of our whitelisted operations
+    let whitelistModels = modelRefs.map(r => this.getModelId(r) ?? '');
+    // handle any additionally specified models (add or subtract, depending on invert = true/false)
+    whitelistModels = invert
+      ? whitelistModels.filter(m => !modelsList.includes(m))
+      : whitelistModels.concat(modelsList);
+    const keys = Object.keys(models);
+    keys.forEach(key => {
+      // remove model definitions that ARE NOT in the whitelist
+      if (!whitelistModels.includes(key)) {
+        delete models[key];
+      }
+    });
+  }
 }
 
-async function main(args: string[]): Promise<number> {
+async function main(args: Array<string>): Promise<number> {
   // parse the command line options
   const argv = minimist(args, { string: ['s', 'w', 'o'], });
 
@@ -187,8 +201,10 @@ async function main(args: string[]): Promise<number> {
   const sourceFile = argv['s'] ?? '';
   const sourceDir = sourceFile.startsWith('http') ? '.' : path.dirname(sourceFile);
   let outputFile: string = argv['o'] ?? sourceDir + path.sep;
-  const operationsList: string = argv['w'];
-  const listOnly: boolean = argv['list'];
+  const operationsFile: string = argv['w'];
+  const modelsFile: string = argv['models'];
+  const listOnly: boolean = argv['list'] ?? argv['list-all'];
+  const listModels: boolean = argv['list-all'];
   const invert: boolean = argv['invert'];
   if (outputFile.endsWith(path.sep)) outputFile += 'slim-swagger.json'
   if (!sourceFile) {
@@ -197,52 +213,71 @@ async function main(args: string[]): Promise<number> {
     const parser = new SwaggerParser();
     const bundle = await parser.bundle(sourceFile);
     const helper = new Helper(bundle);
-    if (listOnly || !operationsList) {
+    if (listOnly || !operationsFile) {
       const ids = helper.getOperationIds();
       ids.forEach(id => {
         console.log(id);
+        if (listModels) {
+          console.group();
+          const modelIds = helper.getModelIdsByOperationId(id);
+          modelIds.forEach(modelId => {
+            console.log(modelId);
+          });
+          console.groupEnd();
+        }
       });
       return Promise.resolve(0);
     }
 
-    return await slim(helper, outputFile, operationsList, invert);
+    return await slim(helper, outputFile, operationsFile, modelsFile, invert);
   }
 }
 
 function usage(exitCode = 0): never {
   console.log(`
-SlimSwagger: a utility to slim down an existing swagger spec to a specific list of operations
+SlimSwagger: a utility to slim down an existing swagger spec to a specific list of operations and model dependencies
 
 Usage:
-  To list all available operationId's in a given spec:
+  To list all available operationId values in a given spec:
   node ./slim-swagger.js -s ./my-swagger-spec.json --list
 
-  To generate a slimmed-down spec with only the operationsListed operations:
-  node ./slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./operationsList-petstore.txt -o ./slim.json
+  To list all available operationId AND modelId values in a given spec:
+  node ./slim-swagger.js -s ./my-swagger-spec.json --list-all
+
+  To generate a slimmed-down spec with only the specified operations + dependencies:
+  node ./slim-swagger.js -s https://petstore.swagger.io/v2/swagger.json -w ./whitelist-petstore-operations.txt -o ./slim.json
 
 Options:
   -s <path>    (required) the path to the source file to be slimmed (can be a filesystem path or a URL)
   -w <path>    (required for slimming) the path to a file containing a list of allowed operationId values (1 per line)
   -o <path>    (optional) the path for the output file (default: source directory + 'slim-swagger.json')
-  --invert     (optional) turns the operations "whitelist" into a "blacklist" (disallowed operationId values to be removed)
+  --models <path> (optional) the path to a file containing a list of _additional_ allowed modelId values (for models that are not dependencies of allowed operations)
+  --invert     (optional) turns the operations/models "whitelist" into a "blacklist" (disallowed values to be removed)
   --list       (optional) outputs a list of all available operationId values from the source file (default if no allowed list is given)
+  --list-all   (optional) same as --list, but output includes modelId values
   `);
 
   process.exit(exitCode);
 }
 
-async function slim(helper: Helper, outputFile: string, operationsList: string, invert: boolean): Promise<number> {
-  let operationsListContents: string = '';
+async function slim(helper: Helper, outputFile: string, operationsFile: string, modelsFile: string, invert: boolean): Promise<number> {
+  let operationsContents: string = '';
+  let modelsContents: string = '';
   try {
     const readFile = util.promisify(fs.readFile);
-    operationsListContents = (await readFile(operationsList)).toString().trim();
-    if (!operationsListContents?.length) throw new Error("Empty operations list file: " + operationsList);
+    operationsContents = (await readFile(operationsFile)).toString().trim();
+    if (!operationsContents?.length) throw new Error("Empty operations list file: " + operationsFile);
+    if (modelsFile) {
+      modelsContents = (await readFile(modelsFile)).toString().trim();
+      if (!modelsContents?.length) throw new Error("Empty models list file: " + modelsFile);
+    }
   } catch (err) {
     console.error(err);
     return Promise.resolve(-1);
   }
-  const operationsListOps = operationsListContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
-  helper.filterToOperationsList(operationsListOps, invert);
+  const operationsList = operationsContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
+  const modelsList = modelsContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
+  helper.filterSpec(operationsList, modelsList, invert);
   const json = helper.toJson();
   try {
     const writeFile = util.promisify(fs.writeFile);
@@ -260,6 +295,6 @@ main(process.argv.slice(2))
   .then(code => {
     process.exit(code);
   }, err => {
-    console.error('Error: ' + err.stack || err.message || err);
+    console.error('Error: ' + (err.stack ?? err.message ?? err));
     process.exit(-1);
   });
