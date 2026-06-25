@@ -45,8 +45,9 @@ Options
 -s <path>    (required) the path to the source file to be slimmed (can be a filesystem path or a URL)
 -w <path>    (required for slimming) the path to a file containing a list of allowed operationId values (1 per line)
 -o <path>    (optional) the path for the output file (default: source directory + 'slim-swagger.json')
+--pretty     (optional) sorts and formats the entire spec (not compatible with slimming)
 --models <path> (optional) the path to a file containing a list of additional allowed modelId values (for models that are not dependencies of allowed operations)
---invert     (optional) turns the operations "whitelist" into a "blacklist" (disallowed operationId values to be removed)
+--invert     (optional) turns the operations/models "whitelist" into a "blacklist" (disallowed values to be removed)
 --list       (optional) outputs a list of all available operationId values from the source file (default if no allowed list is given)
 --list-all   (optional) same as --list, but output includes modelId values
 ```

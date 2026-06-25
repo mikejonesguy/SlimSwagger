@@ -1,8 +1,9 @@
 import SwaggerParser from '@apidevtools/swagger-parser';
-import fs from 'fs';
 import minimist from 'minimist';
-import path from 'path';
-import util from 'util';
+import fs from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import util from 'node:util';
 
 import { OpenAPI } from "openapi-types";
 
@@ -67,6 +68,20 @@ class Helper {
     this.updateStats(true);
   }
 
+  prettySpec() {
+    this.updateStats(false);
+    const doc = this.doc as any;
+    doc.paths = sortByKeys(doc.paths);
+    doc.parameters = sortByKeys(doc.parameters);
+    doc.responses = sortByKeys(doc.responses);
+    doc.definitions = sortByKeys(doc.definitions);
+    if (doc.components) { // v3
+      doc.components.schemas = sortByKeys(doc.components.schemas);
+      doc.components.securitySchemas = sortByKeys(doc.components.securitySchemas);
+    }
+    this.updateStats(true);
+  }
+
   toJson(): string {
     return JSON.stringify(this.doc, undefined, 2);
   }
@@ -74,8 +89,8 @@ class Helper {
   getResults(outputFile: string): string {
     let builder = 'Results:';
     builder += '\n  Original: ' + (this.stats.origOps ?? 0) + ' operations; ' + (this.stats.origModels ?? 0) + ' models';
-    builder += '\n  Slimmed:  ' + (this.stats.slimOps ?? 0) + ' operations; ' + (this.stats.slimModels ?? 0) + ' models';
-    builder += '\n\nSlimmed swagger spec saved to: ' + outputFile;
+    builder += '\n  Modified: ' + (this.stats.slimOps ?? 0) + ' operations; ' + (this.stats.slimModels ?? 0) + ' models';
+    builder += '\n\nModified spec saved to: ' + outputFile;
     return builder
   }
 
@@ -143,10 +158,10 @@ class Helper {
     return models[modelId];
   }
 
-  private getModelId(ref: string): string | null {
+  private getModelId(ref: string): string | undefined {
     if (!ref?.startsWith('#/')) return ref;
     const splits = ref.split('/');
-    return splits[splits.length - 1];
+    return splits.at(-1);
   }
 
   private filterOperations(whitelistOps: Array<string>) {
@@ -203,16 +218,23 @@ async function main(args: Array<string>): Promise<number> {
   let outputFile: string = argv['o'] ?? sourceDir + path.sep;
   const operationsFile: string = argv['w'];
   const modelsFile: string = argv['models'];
+  const prettyOnly: boolean = argv['pretty'];
   const listOnly: boolean = argv['list'] ?? argv['list-all'];
   const listModels: boolean = argv['list-all'];
   const invert: boolean = argv['invert'];
   if (outputFile.endsWith(path.sep)) outputFile += 'slim-swagger.json'
-  if (!sourceFile) {
-    usage();
-  } else {
+  if (sourceFile) {
     const parser = new SwaggerParser();
     const bundle = await parser.bundle(sourceFile);
     const helper = new Helper(bundle);
+
+    if (prettyOnly) {
+      const parser = new SwaggerParser();
+      const bundle = await parser.bundle(sourceFile);
+      const helper = new Helper(bundle);
+      return await pretty(helper, outputFile);
+    }
+
     if (listOnly || !operationsFile) {
       const ids = helper.getOperationIds();
       ids.forEach(id => {
@@ -226,10 +248,12 @@ async function main(args: Array<string>): Promise<number> {
           console.groupEnd();
         }
       });
-      return Promise.resolve(0);
+      return 0;
     }
 
     return await slim(helper, outputFile, operationsFile, modelsFile, invert);
+  } else {
+    usage();
   }
 }
 
@@ -251,6 +275,7 @@ Options:
   -s <path>    (required) the path to the source file to be slimmed (can be a filesystem path or a URL)
   -w <path>    (required for slimming) the path to a file containing a list of allowed operationId values (1 per line)
   -o <path>    (optional) the path for the output file (default: source directory + 'slim-swagger.json')
+  --pretty     (optional) sorts and formats the entire spec (not compatible with slimming)
   --models <path> (optional) the path to a file containing a list of _additional_ allowed modelId values (for models that are not dependencies of allowed operations)
   --invert     (optional) turns the operations/models "whitelist" into a "blacklist" (disallowed values to be removed)
   --list       (optional) outputs a list of all available operationId values from the source file (default if no allowed list is given)
@@ -260,35 +285,60 @@ Options:
   process.exit(exitCode);
 }
 
+const readFileAsync = util.promisify(fs.readFile);
+const writeFileAsync = util.promisify(fs.writeFile);
+
+function sortByKeys<T extends Record<string, unknown>>(obj: T): T {
+  if (!obj) return obj;
+  return Object.entries(obj)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .reduce((acc, [key, value]) => {
+      (acc as Record<string, unknown>)[key] = value;
+      return acc;
+    }, {} as T);
+}
+
 async function slim(helper: Helper, outputFile: string, operationsFile: string, modelsFile: string, invert: boolean): Promise<number> {
   let operationsContents: string = '';
   let modelsContents: string = '';
   try {
-    const readFile = util.promisify(fs.readFile);
-    operationsContents = (await readFile(operationsFile)).toString().trim();
+    operationsContents = (await readFileAsync(operationsFile)).toString().trim();
     if (!operationsContents?.length) throw new Error("Empty operations list file: " + operationsFile);
     if (modelsFile) {
-      modelsContents = (await readFile(modelsFile)).toString().trim();
+      modelsContents = (await readFileAsync(modelsFile)).toString().trim();
       if (!modelsContents?.length) throw new Error("Empty models list file: " + modelsFile);
     }
   } catch (err) {
     console.error(err);
-    return Promise.resolve(-1);
+    return -1;
   }
   const operationsList = operationsContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
   const modelsList = modelsContents.split('\n').map(l => l.trim()).filter(l => !!l.length);
   helper.filterSpec(operationsList, modelsList, invert);
   const json = helper.toJson();
   try {
-    const writeFile = util.promisify(fs.writeFile);
-    await writeFile(outputFile, json);
+    await writeFileAsync(outputFile, json);
     console.log(helper.getResults(outputFile));
   } catch (err) {
     console.error(err);
-    return Promise.resolve(-1);
+    return -1;
   }
   
-  return Promise.resolve(0);
+  return 0;
+}
+
+async function pretty(helper: Helper, outputFile: string): Promise<number> {
+  helper.prettySpec();
+  const json = helper.toJson();
+  try {
+    await writeFileAsync(outputFile, json);
+    console.log(helper.getResults(outputFile));
+  } catch (err) {
+    console.error(err);
+    return -1;
+  }
+
+  return 0;
 }
 
 main(process.argv.slice(2))
@@ -298,3 +348,4 @@ main(process.argv.slice(2))
     console.error('Error: ' + (err.stack ?? err.message ?? err));
     process.exit(-1);
   });
+
